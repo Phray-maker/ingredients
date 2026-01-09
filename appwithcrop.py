@@ -38,8 +38,8 @@ st.title("🔬 Interactive Chemical Scanner")
 uploaded_file = st.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
-    # 1. LOAD & RESIZE
-    img = Image.open(uploaded_file).convert('RGB')
+    # 2. Convert your image to the base64 string
+    img_base64 = get_image_base64(img)
 
     # RESIZER: Limits pixels to prevent browser memory crashes
     MAX_SIZE = 1800
@@ -56,21 +56,21 @@ if uploaded_file:
 
     col_canvas, col_text = st.columns([1.5, 1])
 
+    # 3. Update the canvas call
     with col_canvas:
         st.subheader("Step 1: Select Area")
-        # Use the Base64 string as the background_image
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
             stroke_width=2,
             stroke_color="#ff8c00",
-            background_image=img,  # Streamlit 1.28 works better with the PIL object + Base64 fallback
+            # CHANGE: Use the base64 string here instead of the PIL object
+            background_image=img_base64,
             update_streamlit=True,
             height=display_height,
             width=display_width,
             drawing_mode="rect",
             key="canvas",
         )
-
     with col_text:
         st.subheader("Step 2: Read & Verify")
 
