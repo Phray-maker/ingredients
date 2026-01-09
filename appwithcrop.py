@@ -19,56 +19,56 @@ st.title("🔬 Precision Ingredient Scanner")
 uploaded_file = st.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
-    # 1. Load Original Image
     img = Image.open(uploaded_file).convert('RGB')
     w, h = img.size
 
+    # Use an expander to hide the clunky sliders by default
+    with st.expander("🛠️ Fine-Tune Crop Area", expanded=True):
+        # Nested columns to place sliders side-by-side
+        sl_col1, sl_col2 = st.columns(2)
+        with sl_col1:
+            left_p = st.slider("Left %", 0, 100, 10)
+            top_p = st.slider("Top %", 0, 100, 30)
+        with sl_col2:
+            right_p = st.slider("Right %", 0, 100, 90)
+            bottom_p = st.slider("Bottom %", 0, 100, 70)
+
+    # Calculate pixel coords
+    left, right = int(w * left_p / 100), int(w * right_p / 100)
+    top, bottom = int(h * top_p / 100), int(h * bottom_p / 100)
+
+    # Layout for the visual feedback
     col_crop, col_zoom, col_text = st.columns([1, 1, 1.2])
 
     with col_crop:
-        st.subheader("1. Position Crop")
-        # Native Sliders for cloud stability
-        left_p = st.slider("Left %", 0, 100, 10)
-        right_p = st.slider("Right %", 0, 100, 90)
-        top_p = st.slider("Top %", 0, 100, 30)
-        bottom_p = st.slider("Bottom %", 0, 100, 70)
-
-        # Pixel coords
-        left, right = int(w * left_p / 100), int(w * right_p / 100)
-        top, bottom = int(h * top_p / 100), int(h * bottom_p / 100)
-
-        # Main Preview
+        st.subheader("1. Global View")
         preview_img = img.copy()
         draw = ImageDraw.Draw(preview_img)
-        draw.rectangle([left, top, right, bottom], outline="red", width=20)
-        st.image(preview_img, caption="Global View", use_column_width=True)
+        draw.rectangle([left, top, right, bottom], outline="red", width=25)
+        st.image(preview_img, use_column_width=True)
 
     with col_zoom:
-        st.subheader("2. Zoom View")
-        # Ensure the crop is valid (not zero width/height)
+        st.subheader("2. Zoom Loupe")
         if right > left and bottom > top:
             zoom_crop = img.crop((left, top, right, bottom))
-            # Display magnified crop
-            st.image(zoom_crop, caption="Precision Loupe (Target)", use_column_width=True)
+            st.image(zoom_crop, use_column_width=True)
 
-            if st.button("Run OCR on Zoom View 🔍", use_container_width=True):
-                with st.spinner("Reading ingredients..."):
-                    # PSM 6 for structured lists
+            if st.button("Run OCR 🔍", use_container_width=True):
+                with st.spinner("Reading..."):
                     raw_text = pytesseract.image_to_string(zoom_crop, config='--oem 3 --psm 6')
                     clean_match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', raw_text, re.DOTALL)
                     st.session_state['verified_text'] = clean_match.group(1) if clean_match else raw_text
         else:
-            st.warning("Invalid selection area.")
+            st.error("Invalid Selection")
 
     with col_text:
-        st.subheader("3. Verify & Search")
-        user_text = st.text_area("Edit findings:", value=st.session_state['verified_text'], height=250)
+        st.subheader("3. Results")
+        user_text = st.text_area("Edit text:", value=st.session_state['verified_text'], height=250)
         st.session_state['verified_text'] = user_text
 
         if st.button("Search PubChem 🚀", use_container_width=True):
             st.divider()
             items = [i.strip() for i in re.split(r'[,\n]', user_text) if len(i.strip()) > 2]
-
             for item in items:
                 search_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
                 try:
