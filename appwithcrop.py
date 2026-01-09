@@ -38,6 +38,7 @@ st.title("🔬 Interactive Chemical Scanner")
 uploaded_file = st.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
+    img = Image.open(uploaded_file).convert('RGB')
     # 2. Convert your image to the base64 string
     img_base64 = get_image_base64(img)
 
