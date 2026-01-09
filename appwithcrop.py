@@ -9,27 +9,24 @@ import numpy as np
 import base64
 from io import BytesIO
 
-# --- TESSERACT CONFIG ---
-# Streamlit Cloud uses the system path for Tesseract via packages.txt
+# --- TESSERACT CONFIGURATION ---
+# On Streamlit Cloud, Tesseract is found in the system path via packages.txt
 if not shutil.which("tesseract"):
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 st.set_page_config(page_title="Chemical Scanner", layout="wide")
 
 
-# --- IMAGE UTILITIES ---
+# --- UTILITY: BASE64 CONVERSION ---
 def get_image_base64(img):
-    """
-    Converts a PIL image to a Base64 string.
-    This is the 'secret sauce' for making images show up on the canvas
-    in cloud environments.
-    """
+    """Encodes PIL image to Base64 to bypass cloud URL resolution issues."""
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
     return f"data:image/png;base64,{img_str}"
 
 
+# Initialize session state for the text area
 if 'verified_text' not in st.session_state:
     st.session_state['verified_text'] = ""
 
@@ -38,33 +35,32 @@ st.title("🔬 Interactive Chemical Scanner")
 uploaded_file = st.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
+    # 1. LOAD & RESIZE
     img = Image.open(uploaded_file).convert('RGB')
-    # 2. Convert your image to the base64 string
-    img_base64 = get_image_base64(img)
 
-    # RESIZER: Limits pixels to prevent browser memory crashes
+    # RESIZER: Caps resolution at 1800px to keep Base64 strings manageable
     MAX_SIZE = 1800
     if max(img.size) > MAX_SIZE:
         img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
 
+    # Calculate scale for coordinate mapping
     w, h = img.size
     display_width = 700
     scale = display_width / w
     display_height = int(h * scale)
 
-    # Convert the image to Base64 for the canvas
+    # Convert the resized image to Base64 for the canvas background
     img_base64 = get_image_base64(img)
 
     col_canvas, col_text = st.columns([1.5, 1])
 
-    # 3. Update the canvas call
     with col_canvas:
         st.subheader("Step 1: Select Area")
+        # background_image=img_base64 is the primary fix for the blank canvas
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
             stroke_width=2,
             stroke_color="#ff8c00",
-            # CHANGE: Use the base64 string here instead of the PIL object
             background_image=img_base64,
             update_streamlit=True,
             height=display_height,
@@ -72,33 +68,35 @@ if uploaded_file:
             drawing_mode="rect",
             key="canvas",
         )
+
     with col_text:
         st.subheader("Step 2: Read & Verify")
 
         if st.button("Run OCR on Selection 🔍"):
             ocr_input_img = img
 
-            # Robust coordinate retrieval for the crop
+            # Extract coordinates from canvas and map back to high-res image
             if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
                 obj = canvas_result.json_data["objects"][-1]
 
+                # Use .get() to safely retrieve coords
                 left = int(obj.get("left", 0) / scale)
                 top = int(obj.get("top", 0) / scale)
                 width = int((obj.get("width", 0) * obj.get("scaleX", 1)) / scale)
                 height = int((obj.get("height", 0) * obj.get("scaleY", 1)) / scale)
 
-                # High-res crop ensures better OCR accuracy
+                # Perform the crop on the original high-res PIL object
                 ocr_input_img = img.crop((left, top, left + width, top + height))
 
             with st.spinner("Processing text..."):
-                # PSM 6: Uniform block of text
+                # PSM 6: Assume a single uniform block of text
                 raw_text = pytesseract.image_to_string(ocr_input_img, config='--oem 3 --psm 6')
 
-                # Use regex to strip the header if it exists
+                # Search for 'Ingredients' header within the selection
                 clean_match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', raw_text, re.DOTALL)
                 st.session_state['verified_text'] = clean_match.group(1) if clean_match else raw_text
 
-        # The interactive edit area
+        # User-editable area for manual typo correction
         user_text = st.text_area("Verify Ingredients:", value=st.session_state['verified_text'], height=250)
         st.session_state['verified_text'] = user_text
 
@@ -109,7 +107,7 @@ if uploaded_file:
 
             res_cols = st.columns(2)
             for idx, item in enumerate(items):
-                # Sanitize the name for PubChem
+                # Sanitize name for API search
                 search_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
 
                 with res_cols[idx % 2]:
@@ -118,8 +116,9 @@ if uploaded_file:
                         if results:
                             c = results[0]
                             st.success(f"**{item}**")
+                            # Display molecular PNG from PubChem
                             st.image(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{c.cid}/record/PNG")
                         else:
-                            st.info(f"**{item}** (No match found)")
+                            st.info(f"**{item}** (Not found)")
                     except Exception:
-                        st.error(f"Search failed for {item}")
+                        st.error(f"Error searching {item}")
