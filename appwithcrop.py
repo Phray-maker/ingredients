@@ -1,36 +1,16 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageDraw
 import pubchempy as pcp
 import re
 import shutil
 import numpy as np
-import base64
-from io import BytesIO
 
 # --- TESSERACT CONFIG ---
 if not shutil.which("tesseract"):
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 st.set_page_config(page_title="Chemical Scanner", layout="wide")
-
-
-# --- IMAGE UTILITIES ---
-def get_canvas_ready_img(img, display_width):
-    """Resizes and converts image to Base64 to bypass Cloud/CORS issues."""
-    w, h = img.size
-    scale = display_width / w
-    display_height = int(h * scale)
-
-    # We resize here so the canvas library doesn't have to
-    resized_img = img.resize((display_width, display_height), Image.Resampling.LANCZOS)
-
-    buffered = BytesIO()
-    resized_img.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/png;base64,{img_str}", scale, display_height
-
 
 if 'verified_text' not in st.session_state:
     st.session_state['verified_text'] = ""
@@ -40,58 +20,63 @@ st.title("🔬 Interactive Chemical Scanner")
 uploaded_file = st.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
-    # 1. LOAD & PRE-RESIZE
-    raw_img = Image.open(uploaded_file).convert('RGB')
+    # 1. Load and Standardize Image
+    img = Image.open(uploaded_file).convert('RGB')
+    w, h = img.size
 
-    # Standardize display
-    display_width = 700
-    img_b64, scale, display_height = get_canvas_ready_img(raw_img, display_width)
+    col_crop, col_text = st.columns([1, 1])
 
-    col_canvas, col_text = st.columns([1.5, 1])
-    # Add this right before or after your st_canvas() call
-    st.subheader("Debug: Standard Streamlit Image View")
-    st.image(raw_img, caption="If this is visible but canvas is blank, it's a Component bug.", width=300)
-    with col_canvas:
-        st.subheader("Step 1: Select Area")
-        # By passing the B64 string to a pre-resized image,
-        # we avoid the 'int object has no attribute width' error.
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 165, 0, 0.3)",
-            stroke_width=2,
-            stroke_color="#ff8c00",
-            background_image=Image.open(BytesIO(base64.b64decode(img_b64.split(",")[1]))),
-            update_streamlit=True,
-            height=display_height,
-            width=display_width,
-            drawing_mode="rect",
-            key="canvas",
-        )
+    with col_crop:
+        st.subheader("Step 1: Define Crop Area")
+        # Native Sliders: Immune to iframe/canvas bugs
+        left_p = st.slider("Left Margin %", 0, 100, 10)
+        right_p = st.slider("Right Margin %", 0, 100, 90)
+        top_p = st.slider("Top Margin %", 0, 100, 30)
+        bottom_p = st.slider("Bottom Margin %", 0, 100, 70)
+
+        # Calculate pixel coordinates
+        left, right = int(w * left_p / 100), int(w * right_p / 100)
+        top, bottom = int(h * top_p / 100), int(h * bottom_p / 100)
+
+        # Draw a preview box on a display copy
+        preview_img = img.copy()
+        draw = ImageDraw.Draw(preview_img)
+        draw.rectangle([left, top, right, bottom], outline="red", width=15)
+
+        # Display the preview using standard st.image (which you confirmed works)
+        st.image(preview_img, caption="Red box shows area for OCR", use_container_width=True)
 
     with col_text:
         st.subheader("Step 2: Read & Verify")
 
-        if st.button("Run OCR on Selection 🔍"):
-            ocr_input_img = raw_img
-            if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
-                obj = canvas_result.json_data["objects"][-1]
-                left = int(obj.get("left", 0) / scale)
-                top = int(obj.get("top", 0) / scale)
-                width = int((obj.get("width", 0) * obj.get("scaleX", 1)) / scale)
-                height = int((obj.get("height", 0) * obj.get("scaleY", 1)) / scale)
-                # Crop high-res original
-                ocr_input_img = raw_img.crop((left, top, left + width, top + height))
+        if st.button("Run OCR on Red Box 🔍"):
+            # Crop the high-res original based on sliders
+            ocr_crop = img.crop((left, top, right, bottom))
 
-            with st.spinner("Processing text..."):
-                raw_text = pytesseract.image_to_string(ocr_input_img, config='--oem 3 --psm 6')
+            with st.spinner("Extracting text..."):
+                # PSM 6: Uniform block of text
+                raw_text = pytesseract.image_to_string(ocr_crop, config='--oem 3 --psm 6')
+
+                # Cleanup: look for 'Ingredients' header
                 clean_match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', raw_text, re.DOTALL)
                 st.session_state['verified_text'] = clean_match.group(1) if clean_match else raw_text
 
-        user_text = st.text_area("Verify Ingredients:", value=st.session_state['verified_text'], height=250)
+        # Interactive text area for manual fixes
+        user_text = st.text_area("Tweak detected ingredients:", value=st.session_state['verified_text'], height=250)
         st.session_state['verified_text'] = user_text
 
         if st.button("Check PubChem 🚀"):
-            # ... (PubChem search logic remains the same) ...
-            st.info("Searching PubChem...")
+            st.divider()
             items = [i.strip() for i in re.split(r'[,\n]', user_text) if len(i.strip()) > 2]
+
             for item in items:
-                st.write(f"Searching: {item}")
+                search_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
+                try:
+                    results = pcp.get_compounds(search_name, 'name')
+                    if results:
+                        st.success(f"**{item}**")
+                        st.image(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{results[0].cid}/record/PNG")
+                    else:
+                        st.info(f"**{item}** (No match)")
+                except:
+                    st.error(f"Search failed for {item}")
