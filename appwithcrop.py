@@ -48,7 +48,9 @@ if uploaded_file:
     img_b64, scale, display_height = get_canvas_ready_img(raw_img, display_width)
 
     col_canvas, col_text = st.columns([1.5, 1])
-
+    # Add this right before or after your st_canvas() call
+    st.subheader("Debug: Standard Streamlit Image View")
+    st.image(raw_img, caption="If this is visible but canvas is blank, it's a Component bug.", width=300)
     with col_canvas:
         st.subheader("Step 1: Select Area")
         # By passing the B64 string to a pre-resized image,
