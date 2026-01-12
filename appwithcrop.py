@@ -12,76 +12,79 @@ if not shutil.which("tesseract"):
 
 st.set_page_config(page_title="Chemical Scanner", layout="wide")
 
-# --- 1. STATE INITIALIZATION ---
-if 'ocr_result' not in st.session_state:
-    st.session_state.ocr_result = ""
 
-
-# --- 2. CACHING ---
+# --- CACHING STRATEGY ---
+# This is the most important part to stop the snapping.
+# It ensures the 'img' object doesn't change IDs between reruns.
 @st.cache_data
-def get_image(file):
+def load_and_prep_image(file):
     image = Image.open(file).convert('RGB')
-    # Resize slightly to keep the web interface snappy
-    if image.size[0] > 1500:
-        image.thumbnail((1500, 1500))
+    if image.size[0] > 1800:
+        image.thumbnail((1800, 1800))
     return image
 
 
+if 'ocr_result' not in st.session_state:
+    st.session_state.ocr_result = ""
+
 st.title("🔬 Precision Ingredient Scanner")
 
-uploaded_file = st.sidebar.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
+uploaded_file = st.sidebar.file_uploader("Upload product label", type=["jpg", "png", "jpeg"], key="uploader")
 
 if uploaded_file:
-    img = get_image(uploaded_file)
+    # Use the cached function
+    img = load_and_prep_image(uploaded_file)
+
     col_left, col_right = st.columns([1, 1])
 
     with col_left:
-        st.subheader("1. Select Area")
-        # We only ask for the 'box' coordinates.
-        # This is the most stable return type for Streamlit Cloud.
-        box = st_cropper(
+        st.subheader("1. Position Crop Area")
+
+        # Setting realtime_update=False often solves the snapping in Cloud environments
+        # because it only updates the state ONCE when you let go of the mouse.
+        cropped_img = st_cropper(
             img,
-            realtime_update=True,
-            box_color='red',
+            realtime_update=False,
+            box_color='#FF0000',
             aspect_ratio=None,
-            return_type='box',
-            key='stable_crop_box'
+            key='main_cropper_v2'
         )
 
-        # Manually crop using PIL to ensure no trailing text
-        left, top, width, height = box['left'], box['top'], box['width'], box['height']
-        cropped_img = img.crop((left, top, left + width, top + height))
+        if cropped_img is not None:
+            st.write("Current selection:")
+            st.image(cropped_img, use_column_width=True)
 
     with col_right:
-        st.subheader("2. OCR & Results")
+        st.subheader("2. OCR & Analysis")
 
         if st.button("Extract Text 🔍", use_container_width=True):
-            with st.spinner("Processing..."):
-                # Pre-process for OCR clarity
-                proc = ImageOps.grayscale(cropped_img)
-                proc = ImageEnhance.Contrast(proc).enhance(2.0)
+            if cropped_img is not None:
+                with st.spinner("Processing..."):
+                    proc = ImageOps.grayscale(cropped_img)
+                    proc = ImageEnhance.Contrast(proc).enhance(2.0)
+                    text = pytesseract.image_to_string(proc, config='--oem 3 --psm 6')
+                    match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', text, re.DOTALL)
+                    st.session_state.ocr_result = match.group(1) if match else text
 
-                # Run OCR - PSM 6 is best for blocks of text like ingredient lists
-                raw_text = pytesseract.image_to_string(proc, config='--oem 3 --psm 6')
-
-                # Basic cleanup
-                clean = re.sub(r'\s+', ' ', raw_text).strip()
-                st.session_state.ocr_result = clean
-
-        # Editable Result
-        edited_text = st.text_area("Edit Ingredients:", value=st.session_state.ocr_result, height=200)
-        st.session_state.ocr_result = edited_text
+        final_text = st.text_area(
+            "Verify Ingredients:",
+            value=st.session_state.ocr_result,
+            height=200
+        )
+        st.session_state.ocr_result = final_text
 
         if st.button("Search PubChem 🚀", use_container_width=True):
-            ingredients = [i.strip() for i in re.split(r'[,\n]', edited_text) if len(i.strip()) > 2]
-            for item in ingredients:
+            st.divider()
+            items = [i.strip() for i in re.split(r'[,\n]', final_text) if len(i.strip()) > 2]
+            for item in items:
+                clean_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
                 try:
-                    # Strip extra characters for search
-                    search_term = re.sub(r'[^a-zA-Z0-9 ]', '', item)
-                    res = pcp.get_compounds(search_term, 'name')
+                    res = pcp.get_compounds(clean_name, 'name')
                     if res:
                         st.success(f"**{item}**")
                         st.image(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{res[0].cid}/record/PNG",
                                  width=150)
+                    else:
+                        st.info(f"**{item}** - No match.")
                 except:
-                    continue
+                    st.error(f"Error: {item}")
