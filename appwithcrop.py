@@ -75,40 +75,41 @@ if uploaded_file:
 
         if st.button("Search PubChem 🚀", use_container_width=True):
             st.divider()
-            # Split by commas or newlines and clean up
             items = [i.strip() for i in re.split(r'[,\n]', final_text) if len(i.strip()) > 2]
 
             for item in items:
-                # Remove brackets/parentheses and special chars for better search results
                 clean_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
 
                 try:
-                    # Requesting specific properties to reduce API overhead
                     res = pcp.get_compounds(clean_name, 'name')
 
                     if res:
                         c = res[0]
-                        # Create a nice container for each "Card"
-                        with st.container(border=True):
+                        # Using expander as the "Card" container
+                        with st.expander(f"📊 {item.upper()}", expanded=True):
                             col_img, col_info = st.columns([1, 2])
 
                             with col_img:
+                                # Display the 2D structure
                                 st.image(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{c.cid}/record/PNG",
-                                         caption=item)
+                                         use_column_width=True)
 
                             with col_info:
-                                st.subheader(f"{item.title()}")
-                                st.write(f"**Formula:** {c.molecular_formula}")
+                                st.write(f"**Molecular Formula:** {c.molecular_formula}")
+                                st.write(f"**PubChem CID:** {c.cid}")
                                 st.write(f"**IUPAC Name:** {c.iupac_name}")
 
-                                # Safety Data Section
-                                # Note: Hazard statements usually require fetching the full record
-                                # or using a different pcp method. For now, a link is most reliable:
-                                st.markdown(
-                                    f"[View Safety & Toxicity Data on PubChem](https://pubchem.ncbi.nlm.nih.gov/compound/{c.cid}#section=Safety-and-Hazards)")
+                                # Adding a button-like link for Safety Data
+                                st.markdown(f"""
+                                        <a href="https://pubchem.ncbi.nlm.nih.gov/compound/{c.cid}#section=Safety-and-Hazards" target="_blank">
+                                            <button style="width:100%; border-radius:5px; background-color:#ff4b4b; color:white; border:none; padding:5px;">
+                                                View Safety & Hazards
+                                            </button>
+                                        </a>
+                                        """, unsafe_allow_html=True)
 
                     else:
-                        st.warning(f"**{item}** - No PubChem match found.")
+                        st.info(f"**{item}** - No PubChem match found.")
 
                 except Exception as e:
                     st.error(f"Error searching for {item}: {e}")
