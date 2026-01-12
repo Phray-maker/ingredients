@@ -33,7 +33,17 @@ if uploaded_file:
 
         # This component replaces ALL the slider logic
         # It returns a PIL Image of the cropped area in real-time
-        cropped_img = st_cropper(img, realtime_update=True, box_color='#FF0000', aspect_ratio=None)
+        #cropped_img = st_cropper(img, realtime_update=True, box_color='#FF0000', aspect_ratio=None)
+        # Change this line in your code:
+        cropped_img = st_cropper(
+            img,
+            realtime_update=False,  # This prevents the 'snapping' during the drag
+            box_color='#FF0000',
+            aspect_ratio=None,  # Allows free-form rectangular cropping
+            key='main_cropper'  # Providing a static key prevents state loss
+        )
+
+
 
         if st.button("Run OCR 🔍", use_container_width=True):
             with st.spinner("Extracting text..."):
