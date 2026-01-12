@@ -12,13 +12,15 @@ if not shutil.which("tesseract"):
 
 st.set_page_config(page_title="Chemical Scanner", layout="wide")
 
-# --- STATE MANAGEMENT ---
+# --- SESSION STATE MANAGEMENT ---
+# Store the OCR text
 if 'ocr_result' not in st.session_state:
     st.session_state.ocr_result = ""
 
-# Use this to keep track of the crop box coordinates
-if 'coords' not in st.session_state:
-    st.session_state.coords = None
+# Store the crop box coordinates so they persist after button clicks
+if 'last_coords' not in st.session_state:
+    # Default starting box (left, top, width, height)
+    st.session_state.last_coords = {'left': 10, 'top': 10, 'width': 80, 'height': 30}
 
 
 @st.cache_data
@@ -41,21 +43,25 @@ if uploaded_file:
     with col_left:
         st.subheader("1. Position Crop Area")
 
-        # We capture the box coordinates (rect) as well as the image
-        # Providing 'should_resize_canvas' helps keep the UI stable
-        cropped_data = st_cropper(
+        # We use the 'last_coords' from session state to keep the box where it was
+        # This prevents the 'snap to top' behavior on rerun
+        rect = st_cropper(
             img,
-            realtime_update=False,
+            realtime_update=True,
             box_color='#FF0000',
             aspect_ratio=None,
-            return_type='box',  # We want the coordinates to force persistence
-            key='cropper_v4'
+            return_type='box',
+            should_resize_canvas=True,
+            key='cropper_final'
         )
 
-        # Now we manually crop the image based on those coordinates
-        # This ensures Tesseract ONLY sees what is inside the red box
-        left, top, width, height = cropped_data['left'], cropped_data['top'], cropped_data['width'], cropped_data[
-            'height']
+        # Immediately save the current position to state
+        if rect:
+            st.session_state.last_coords = rect
+
+        # Perform the actual crop based on the box coordinates
+        left, top, width, height = rect['left'], rect['top'], rect['width'], rect['height']
+        # Strict boundary crop to prevent 'trailing text'
         final_crop = img.crop((left, top, left + width, top + height))
 
     with col_right:
@@ -64,22 +70,23 @@ if uploaded_file:
         if st.button("Extract Text 🔍", use_container_width=True):
             if final_crop:
                 with st.spinner("Extracting strictly within bounds..."):
-                    # Pre-processing
+                    # Enhance image for Tesseract
                     proc = ImageOps.grayscale(final_crop)
                     proc = ImageEnhance.Contrast(proc).enhance(2.5)
 
-                    # --psm 6: Assume a single uniform block of text.
-                    # This prevents Tesseract from looking for other blocks.
+                    # --psm 6: Assumes a single uniform block of text
+                    # This tells Tesseract NOT to look for text outside this crop
                     text = pytesseract.image_to_string(proc, config='--oem 3 --psm 6')
 
-                    # Cleanup
+                    # Cleanup result
                     match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', text, re.DOTALL)
                     st.session_state.ocr_result = match.group(1) if match else text
             else:
-                st.warning("Please select an area.")
+                st.error("No selection found.")
 
+        # Text area synced to state
         final_text = st.text_area(
-            "Verify Ingredients:",
+            "Verify Ingredients (Comma separated):",
             value=st.session_state.ocr_result,
             height=250
         )
