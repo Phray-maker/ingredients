@@ -12,98 +12,76 @@ if not shutil.which("tesseract"):
 
 st.set_page_config(page_title="Chemical Scanner", layout="wide")
 
-# --- SESSION STATE MANAGEMENT ---
-# Store the OCR text
+# --- 1. STATE INITIALIZATION ---
 if 'ocr_result' not in st.session_state:
     st.session_state.ocr_result = ""
 
-# Store the crop box coordinates so they persist after button clicks
-if 'last_coords' not in st.session_state:
-    # Default starting box (left, top, width, height)
-    st.session_state.last_coords = {'left': 10, 'top': 10, 'width': 80, 'height': 30}
 
-
+# --- 2. CACHING ---
 @st.cache_data
-def load_and_prep_image(file):
+def get_image(file):
     image = Image.open(file).convert('RGB')
-    if image.size[0] > 1800:
-        image.thumbnail((1800, 1800))
+    # Resize slightly to keep the web interface snappy
+    if image.size[0] > 1500:
+        image.thumbnail((1500, 1500))
     return image
 
 
 st.title("🔬 Precision Ingredient Scanner")
 
-uploaded_file = st.sidebar.file_uploader("Upload product label", type=["jpg", "png", "jpeg"], key="uploader")
+uploaded_file = st.sidebar.file_uploader("Upload product label", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
-    img = load_and_prep_image(uploaded_file)
-
-    col_left, col_right = st.columns([1.2, 1])
+    img = get_image(uploaded_file)
+    col_left, col_right = st.columns([1, 1])
 
     with col_left:
-        st.subheader("1. Position Crop Area")
-
-        # We use the 'last_coords' from session state to keep the box where it was
-        # This prevents the 'snap to top' behavior on rerun
-        rect = st_cropper(
+        st.subheader("1. Select Area")
+        # We only ask for the 'box' coordinates.
+        # This is the most stable return type for Streamlit Cloud.
+        box = st_cropper(
             img,
             realtime_update=True,
-            box_color='#FF0000',
+            box_color='red',
             aspect_ratio=None,
             return_type='box',
-            should_resize_canvas=True,
-            key='cropper_final'
+            key='stable_crop_box'
         )
 
-        # Immediately save the current position to state
-        if rect:
-            st.session_state.last_coords = rect
-
-        # Perform the actual crop based on the box coordinates
-        left, top, width, height = rect['left'], rect['top'], rect['width'], rect['height']
-        # Strict boundary crop to prevent 'trailing text'
-        final_crop = img.crop((left, top, left + width, top + height))
+        # Manually crop using PIL to ensure no trailing text
+        left, top, width, height = box['left'], box['top'], box['width'], box['height']
+        cropped_img = img.crop((left, top, left + width, top + height))
 
     with col_right:
-        st.subheader("2. OCR & Analysis")
+        st.subheader("2. OCR & Results")
 
         if st.button("Extract Text 🔍", use_container_width=True):
-            if final_crop:
-                with st.spinner("Extracting strictly within bounds..."):
-                    # Enhance image for Tesseract
-                    proc = ImageOps.grayscale(final_crop)
-                    proc = ImageEnhance.Contrast(proc).enhance(2.5)
+            with st.spinner("Processing..."):
+                # Pre-process for OCR clarity
+                proc = ImageOps.grayscale(cropped_img)
+                proc = ImageEnhance.Contrast(proc).enhance(2.0)
 
-                    # --psm 6: Assumes a single uniform block of text
-                    # This tells Tesseract NOT to look for text outside this crop
-                    text = pytesseract.image_to_string(proc, config='--oem 3 --psm 6')
+                # Run OCR - PSM 6 is best for blocks of text like ingredient lists
+                raw_text = pytesseract.image_to_string(proc, config='--oem 3 --psm 6')
 
-                    # Cleanup result
-                    match = re.search(r'(?i)ingredients?[:\-\s]+(.*)', text, re.DOTALL)
-                    st.session_state.ocr_result = match.group(1) if match else text
-            else:
-                st.error("No selection found.")
+                # Basic cleanup
+                clean = re.sub(r'\s+', ' ', raw_text).strip()
+                st.session_state.ocr_result = clean
 
-        # Text area synced to state
-        final_text = st.text_area(
-            "Verify Ingredients (Comma separated):",
-            value=st.session_state.ocr_result,
-            height=250
-        )
-        st.session_state.ocr_result = final_text
+        # Editable Result
+        edited_text = st.text_area("Edit Ingredients:", value=st.session_state.ocr_result, height=200)
+        st.session_state.ocr_result = edited_text
 
         if st.button("Search PubChem 🚀", use_container_width=True):
-            st.divider()
-            items = [i.strip() for i in re.split(r'[,\n]', final_text) if len(i.strip()) > 2]
-            for item in items:
-                clean_name = re.sub(r'\(.*?\)|[^a-zA-Z0-9 ]', '', item).strip()
+            ingredients = [i.strip() for i in re.split(r'[,\n]', edited_text) if len(i.strip()) > 2]
+            for item in ingredients:
                 try:
-                    res = pcp.get_compounds(clean_name, 'name')
+                    # Strip extra characters for search
+                    search_term = re.sub(r'[^a-zA-Z0-9 ]', '', item)
+                    res = pcp.get_compounds(search_term, 'name')
                     if res:
                         st.success(f"**{item}**")
                         st.image(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{res[0].cid}/record/PNG",
                                  width=150)
-                    else:
-                        st.info(f"**{item}** - No match.")
                 except:
-                    st.error(f"Error: {item}")
+                    continue
